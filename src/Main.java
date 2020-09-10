@@ -1,9 +1,6 @@
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.HashMap;
 import java.util.Scanner;
 
 public class Main {
@@ -15,9 +12,10 @@ public class Main {
             while (myReader.hasNextLine()) {
                 prgStr.append(myReader.nextLine());
             }
-            Parser parser = new Parser();
-            var prg = parser.parse(prgStr.toString());
-            System.out.println(prg);
+
+            var prg = Parser.parse(prgStr.toString());
+//            var res = prg.eval(new HashMap<String, Val>(), new HashMap<RefVal, Val>());
+//            System.out.println(res);
             myReader.close();
         } catch (FileNotFoundException | Parser.NoMatchFoundException e) {
             System.out.println("An error occurred.");

@@ -1,156 +1,158 @@
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-abstract class Lit { }
-
-class IntLit extends Lit {
-    public final int value;
-    public IntLit(int value) { this.value = value; }
-}
-
-class StringLit extends Lit {
-    private final String value;
-    public StringLit(String value) { this.value = value; }
-}
-
-abstract class Type { }
-class IntType extends Type { }
-class StringType extends Type { }
-
-abstract class Node { }
-
-abstract class ParserNode extends Node {
-    String str;
-
-    public void setStr(String str) {
-        this.str = str;
-    }
-
-    abstract Exp encode() throws Parser.NoMatchFoundException;
-}
-
-abstract class Exp extends Node { }
-
-class VarDeclP extends ParserNode {
-
-    public VarDeclExp encode() throws Parser.NoMatchFoundException {
-        HashMap<String, Supplier<Type>> typePatterns = new HashMap<>() {{
-            put("int", IntType::new);
-            put("string",StringType::new);
-        }};
-
-        // get type
-        Parser.PatternMatch<Type> type = Parser.matchNextPattern(str, typePatterns);
-        str = type.resultString.substring(1);
-
-        // get id
-        Matcher m = Pattern.compile("[a-zA-Z]+").matcher(str);
-        m.find();
-        String id = m.group();
-
-        // reduce to lit expression
-        str = str.substring(id.length()).replaceFirst(" *= *", "");
-
-        return new VarDeclExp(id, type.obj, Parser.makeLit(str));
-    }
-}
-
-class VarDeclExp extends Exp {
-    public Type type;
-    public String id;
-    public Lit value;
-
-    public VarDeclExp(String id, Type type, Lit value) {
-        this.type = type;
-        this.id = id;
-        this.value = value;
-    }
-}
-
-class Assignment extends ParserNode {
-
-    public AssignmentExp encode() {
-
-        Matcher m = Pattern.compile("[a-zA-Z]+").matcher(str);
-        m.find();
-        String id = m.group();
-
-        str = str.replaceFirst("[a-zA-Z]+ = ", "");
-
-        return new AssignmentExp(id, Parser.makeLit(str));
-    }
-}
-
-class AssignmentExp extends Exp {
-    public String id;
-    public Lit value;
-
-    public AssignmentExp(String id, Lit value) {
-        this.id = id;
-        this.value = value;
-    }
-}
-
 public class Parser {
-    private final HashMap<String, Supplier<ParserNode>> expPatterns = new HashMap<>() {{
-        put("[a-zA-Z]+ [a-zA-Z]+ = [^;]+", VarDeclP::new);
-        put("[a-zA-Z]+ = [^;]+", Assignment::new);
+    private static final HashMap<String, Function<String, Literal>> literalPatterns = new HashMap<>() {{
+        put("\\d+", x -> new IntLit(Integer.parseInt(x)));
+        put("\\D+", StringLit::new);
     }};
 
-    public ArrayList<Exp> parse(String program) throws NoMatchFoundException {
-        String prg = program.replaceAll("; *", "; ");
-        ArrayList<ParserNode> parserNodes = new ArrayList<>();
-        while (!prg.isBlank()) {
-            PatternMatch<ParserNode> match = matchNextPattern(prg, expPatterns);
-            prg = match.resultString.substring(2);
-            match.obj.setStr(match.matchString);
-            parserNodes.add(match.obj);
-        }
+    private static final HashMap<String, Supplier<Type>> typePatterns = new HashMap<>() {{
+        put("int", IntType::new);
+        put("string", StringType::new);
+    }};
 
-        ArrayList<Exp> exps = new ArrayList<>();
-        for (ParserNode node : parserNodes) {
-            exps.add(node.encode());
-        }
+    private static final HashMap<String, Function<String, ParserExp>> expPatterns = new HashMap<>() {{
+        put("\\{ .* \\}", ParserBlockExp::new);
+        put("[a-zA-Z]+ [a-zA-Z]+ = [^;]+", ParserVarDecl::new);
+        put("[a-zA-Z]+ = [^;]+", ParserAssignment::new);
+    }};
 
-        return exps;
+    public static Exp parse(String program) throws NoMatchFoundException {
+        return new ParserBlockExp(program).encode();
     }
 
-    static class PatternMatch<T> {
-        public T obj;
-        public String matchString;
-        public StringBuilder resultString;
+    static class RegexMatcher {
+        public String string;
+        public String lastMatch;
 
-        public PatternMatch(T obj, String matchString, StringBuilder resultString) {
-            this.obj = obj;
-            this.matchString = matchString;
-            this.resultString = resultString;
+        public RegexMatcher(String string) {
+            this.string = string;
+            lastMatch = null;
+        }
+
+        public boolean hasNext() { return !string.isBlank(); }
+
+        public boolean hasNextUntil(String regex) { return !Pattern.compile(regex).matcher(string).lookingAt(); }
+
+        public void skip(int places) {
+            string = string.substring(places);
+        }
+
+        public <T> T matchNextPatternF(Map<String, Function<String, T>> patterns) throws NoMatchFoundException {
+            for (Map.Entry<String, Function<String, T>> pattern : patterns.entrySet()) {
+                Matcher m = Pattern.compile(pattern.getKey()).matcher(string);
+                if (m.lookingAt()) {
+                    lastMatch = m.group();
+                    string = string.substring(lastMatch.length());
+                    return pattern.getValue().apply(lastMatch);
+                }
+            }
+            throw new NoMatchFoundException();
+        }
+
+        public <T> T matchNextPatternF(String s, Function<String, T> f) throws NoMatchFoundException {
+            Matcher m = Pattern.compile(s).matcher(string);
+            if (m.lookingAt()) {
+                lastMatch = m.group();
+                string = string.substring(lastMatch.length());
+                return f.apply(lastMatch);
+            }
+            throw new NoMatchFoundException();
+        }
+
+        public <T> T matchNextPatternS(Map<String, Supplier<T>> patterns) throws NoMatchFoundException {
+            for (Map.Entry<String, Supplier<T>> pattern : patterns.entrySet()) {
+                Matcher m = Pattern.compile(pattern.getKey()).matcher(string);
+                if (m.lookingAt()) {
+                    lastMatch = m.group();
+                    string = string.substring(lastMatch.length());
+                    return pattern.getValue().get();
+                }
+            }
+            throw new NoMatchFoundException();
         }
     }
 
     static class NoMatchFoundException extends Exception { }
 
-    public static <T> PatternMatch<T> matchNextPattern(String str, Map<String, Supplier<T>> patterns) throws NoMatchFoundException {
-        for (String pattern : patterns.keySet()) {
-            Matcher m = Pattern.compile(pattern).matcher(str);
-            if (m.lookingAt()) {
-                StringBuilder sb = new StringBuilder();
-                m.appendReplacement(sb, "");
-                return new PatternMatch<>(patterns.get(pattern).get(), m.group(), m.appendTail(sb));
-            }
-        }
-        throw new NoMatchFoundException();
+    static abstract class ParserExp {
+        String string;
+        public ParserExp(String string) { this.string = string; }
+        abstract AstNode encode() throws NoMatchFoundException;
     }
 
-    public static Lit makeLit(String str) {
-        if (str.matches("\\d+")) {
-            return new IntLit(Integer.parseInt(str));
-        } else if (str.matches("\\D+")) {
-            return new StringLit(str);
+
+    static class ParserBlockExp extends ParserExp {
+        public ParserBlockExp(String string) { super(string); }
+
+        @Override
+        Exp encode() throws NoMatchFoundException {
+            ArrayList<VarDecl> vars = new ArrayList<>();
+            ArrayList<DefDecl> defs = new ArrayList<>();
+            ArrayList<ClassDecl> classes = new ArrayList<>();
+            ArrayList<Exp> exps = new ArrayList<>();
+            RegexMatcher rm = new RegexMatcher(string);
+            rm.skip(2);
+            while (rm.hasNextUntil(" }")) {
+                AstNode node = rm.matchNextPatternF(expPatterns).encode();
+
+                if (node.getClass() == VarDecl.class) {
+                    vars.add((VarDecl) node);
+                } else if (node.getClass() == DefDecl.class) {
+                    defs.add((DefDecl) node);
+                } else if (node.getClass() == ClassDecl.class) {
+                    classes.add((ClassDecl) node);
+                } else if (node.getClass() == Exp.class) {
+                    exps.add((Exp) node);
+                }
+
+                rm.skip(2);
+            }
+            return new BlockExp(vars, defs, classes, exps);
         }
-        throw new Error();
+    }
+
+    static abstract class ParserDecl {
+        String string;
+        public ParserDecl(String string) { this.string = string; }
+        abstract Decl encode() throws NoMatchFoundException;
+    }
+
+    static class ParserVarDecl extends ParserExp {
+        public ParserVarDecl(String string) {
+            super(string);
+        }
+
+        @Override
+        AstNode encode() throws NoMatchFoundException {
+            RegexMatcher rm = new RegexMatcher(string);
+            Type type = rm.matchNextPatternS(Parser.typePatterns);
+            rm.skip(1);
+            String id = rm.matchNextPatternF("[a-zA-Z]+", x -> x);
+            rm.skip(3);
+            Literal value = rm.matchNextPatternF(literalPatterns);
+            return new VarDecl(id, type, value);
+        }
+    }
+
+    static class ParserAssignment extends ParserExp {
+        public ParserAssignment(String string) {
+            super(string);
+        }
+
+        @Override
+        Exp encode() throws NoMatchFoundException {
+            RegexMatcher rm = new RegexMatcher(string);
+            String id = rm.matchNextPatternF("[a-zA-Z]+", x -> x);
+            rm.skip(3);
+            Literal value = rm.matchNextPatternF(literalPatterns);
+            return new AssignmentExp(id, value);
+        }
     }
 }
